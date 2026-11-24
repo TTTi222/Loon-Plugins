@@ -1,0 +1,7 @@
+{
+  "upstream": "ZenmoFeiShi/Qx",
+  "commit": "5df3cafc468419e7b58b0f4a1b75df0786ab1c67",
+  "script_sha256": "9a48981f5d1cdac2d7c72c8f1164752ce712113eaf687aeeba2829e78c66308a",
+  "script_hosting": "upstream",
+  "minimum_loon_build": 1008
+}
