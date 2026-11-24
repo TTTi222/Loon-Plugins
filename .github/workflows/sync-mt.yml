@@ -1,0 +1,56 @@
+name: Sync Meituan Loon plugin
+on:
+  schedule:
+    - cron: '37 */6 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - converters/mt.py
+      - .github/workflows/sync-mt.yml
+
+concurrency:
+  group: mt-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Convert and test without publishing
+        env:
+          PUBLISH_AUTHORIZED: 'false'
+        run: python3 converters/mt.py
+  publish:
+    needs: validate
+    if: ${{ vars.UPSTREAM_PUBLICATION_AUTHORIZED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Convert and validate
+        env:
+          PUBLISH_AUTHORIZED: 'true'
+        run: python3 converters/mt.py
+      - name: Publish Meituan files only
+        run: |
+          git add plugins/MT.lpx plugins/MT.version.json
+          if git diff --cached --quiet; then
+            echo 'No changes'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Sync validated Meituan Loon plugin'
+          git push origin HEAD:main
