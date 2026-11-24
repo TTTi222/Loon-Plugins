@@ -120,6 +120,37 @@ def main():
         path = Path(tmp) / "MT.js"
         path.write_text(js, encoding="utf-8")
         subprocess.run(["node", "--check", str(path)], check=True)
+        # Exercise the actual upstream JS in a mock Loon text environment.
+        fixture = Path(tmp) / "smoke.cjs"
+        fixture.write_text(r"""
+const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:assert/strict');
+const js = fs.readFileSync(process.argv[2], 'utf8');
+const cases = [
+  ['/aggroup/indexTab', {data:{resource:{tabArea:[{tabName:'homepage'},{tabName:'mine'},{tabName:'video'},{tabName:'xiaotuan'}]}}}, o=>o.data.resource.tabArea.length===2],
+  ['/lycoris/scene/gwc_feed1_2265', {data:[1]}, o=>o.data.length===0 && o.bottom===true],
+  ['/usercenter/display', {children:[{name:'mine_cross_recommend'},{name:'keep'}]}, o=>o.children.length===1 && o.children[0].name==='keep'],
+  ['/searchpage/defaultword', {searchIntroduceResponse:{defaultWordRes:{defaultWordItems:[1]},HotWordInfos:[1]}}, o=>o.searchIntroduceResponse.defaultWordRes.defaultWordItems.length===0 && o.searchIntroduceResponse.HotWordInfos.length===0],
+  ['/searchpage/hotword/city/divide/hotrecommend/', {data:{segmentsV2:[{hotwordSegments:[{pageName:'EntranceHotwordsV2Hotwords'}]}],aiSearchBubble:{bubbleTexts:[1]}}}, o=>o.data.segmentsV2.length===0 && o.data.aiSearchBubble.bubbleTexts.length===0],
+  ['/assistant/getAppClientHornConfig', {data:JSON.stringify({skills:{a:1}})}, o=>Object.keys(JSON.parse(o.data).skills).length===0],
+  ['/mop/entry/shoppingCartEntry', {resourcesMap:{topBannerArea:[1]}}, o=>o.resourcesMap.topBannerArea.length===0],
+  ['/api/entryModule/startupPicture', {data:{resource:{startupPicArea:[1]}}}, o=>o.data.resource.startupPicArea.length===0]
+];
+function run(url, body) {
+  const results=[];
+  vm.runInNewContext(js, {$request:{url:'https://example.test'+url},$response:{body},$done:v=>results.push(v),console:{log(){}}}, {timeout:2000});
+  assert.equal(results.length,1);
+  return results[0];
+}
+for (const [url, body, check] of cases) {
+  const result = run(url, JSON.stringify(body));
+  assert.equal(typeof result.body,'string',url);
+  assert.ok(check(JSON.parse(result.body)),url);
+}
+assert.equal(Object.keys(run('/aggroup/indexTab','invalid json')).length,0);
+assert.equal(Object.keys(run('/unknown','{}')).length,0);
+console.log('8 mock response routes and 2 pass-through cases passed');
+""", encoding="utf-8")
+        subprocess.run(["node", str(fixture), str(path)], check=True)
     output = convert(get(base + "/MT.snippet"), base + "/MT.js")
     print("Static checks passed; upstream commit:", commit)
     if os.environ.get("PUBLISH_AUTHORIZED") != "true":
