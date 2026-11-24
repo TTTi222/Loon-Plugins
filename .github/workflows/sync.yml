@@ -1,0 +1,54 @@
+name: Sync Txvideo Loon plugin
+on:
+  schedule:
+    - cron: '23 */6 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - converters/txvideo.py
+      - .github/workflows/sync.yml
+
+concurrency:
+  group: txvideo-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Convert and check without publishing
+        env:
+          PUBLISH_AUTHORIZED: 'false'
+        run: python3 converters/txvideo.py
+  publish:
+    needs: validate
+    if: ${{ vars.UPSTREAM_PUBLICATION_AUTHORIZED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Convert, validate and prepare files
+        env:
+          PUBLISH_AUTHORIZED: 'true'
+        run: python3 converters/txvideo.py
+      - name: Publish only after checks succeed
+        run: |
+          git add plugins scripts
+          if git diff --cached --quiet; then
+            echo 'No changes'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Sync validated Txvideo Loon plugin'
+          git push origin HEAD:main
