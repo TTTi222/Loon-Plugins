@@ -1,0 +1,6 @@
+{
+  "upstream": "ZenmoFeiShi/Qx",
+  "commit": "5df3cafc468419e7b58b0f4a1b75df0786ab1c67",
+  "sha256": "23b1b2849eede10948070ef8983ba16697942d73b3f46413afc40277b24cdd2d",
+  "limitations": "request body required for direct correlation; no invented sessionIndex"
+}
