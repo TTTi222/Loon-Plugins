@@ -1,0 +1,56 @@
+name: Sync HelloBike Loon plugin
+on:
+  schedule:
+    - cron: '51 */6 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - converters/helloobike.py
+      - .github/workflows/sync-helloobike.yml
+
+concurrency:
+  group: helloobike-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Convert and test without publishing
+        env:
+          PUBLISH_AUTHORIZED: 'false'
+        run: python3 converters/helloobike.py
+  publish:
+    needs: validate
+    if: ${{ vars.UPSTREAM_PUBLICATION_AUTHORIZED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Convert and validate
+        env:
+          PUBLISH_AUTHORIZED: 'true'
+        run: python3 converters/helloobike.py
+      - name: Publish HelloBike files only
+        run: |
+          git add plugins/helloobike.lpx plugins/helloobike.version.json scripts/easybike-ad-*.js
+          if git diff --cached --quiet; then
+            echo 'No changes'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Sync validated HelloBike Loon plugin'
+          git push origin HEAD:main
