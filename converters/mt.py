@@ -105,7 +105,10 @@ def convert(source, script_url):
     return result
 
 def main():
-    commit = json.loads(get(f"https://api.github.com/repos/{UPSTREAM}/commits/main"))["sha"]
+    ref = subprocess.check_output(["git", "ls-remote", "--exit-code", f"https://github.com/{UPSTREAM}.git", "refs/heads/main"], text=True, timeout=45).strip()
+    commit, branch = ref.split()
+    if branch != "refs/heads/main":
+        raise ValueError("Unexpected upstream branch")
     if not re.fullmatch(r"[a-f0-9]{40}", commit):
         raise ValueError("Invalid upstream commit")
     base = f"https://raw.githubusercontent.com/{UPSTREAM}/{commit}"
