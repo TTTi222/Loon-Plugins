@@ -24,13 +24,19 @@ Loon 插件兼容性适配、格式转换及自动同步项目。
 
 ## 插件来源与适配记录
 
-| 插件 | 原作者 | 上游来源 | 授权及测试状态 |
-| --- | --- | --- | --- |
-| 腾讯视频净化（TxvideoAD） | ZenMoFiShi | [ZenmoFeiShi/Qx](https://github.com/ZenmoFeiShi/Qx) | 上游声明仅供学习与自用；公开再分发授权尚未独立确认；静态检查通过，Loon 真机效果待验证 |
+| 插件 | 原作者 | 上游来源 | 远程订阅 | 测试状态 |
+| :--- | :--- | :---: | :---: | :---: |
+| 腾讯视频净化 | ZenMoFiShi | [源码](https://github.com/ZenmoFeiShi/Qx/blob/main/TxvideoAD.snippet) | [LPX](https://raw.githubusercontent.com/TTTi222/Loon-Plugins/main/plugins/TxvideoAD.lpx) | 静态通过 |
+| 美团净化 | ZenMoFiShi | [源码](https://github.com/ZenmoFeiShi/Qx/blob/main/MT.snippet) | [LPX](https://raw.githubusercontent.com/TTTi222/Loon-Plugins/main/plugins/MT.lpx) | 模拟通过 |
+| 哈啰净化 | ZenMoFiShi | [源码](https://github.com/ZenmoFeiShi/Qx/blob/main/helloobike.snippet) | [LPX](https://raw.githubusercontent.com/TTTi222/Loon-Plugins/main/plugins/helloobike.lpx) | 模拟通过 |
 
-| 美团净化（MT） | ZenMoFiShi | [MT.snippet](https://github.com/ZenmoFeiShi/Qx/blob/main/MT.snippet) | 直接引用上游 JS；上游仅供学习与自用；公开规则转换授权未独立确认；真机测试待验证 |
+### 适配说明
 
-| 哈啰净化（helloobike） | ZenMoFiShi | [helloobike.snippet](https://github.com/ZenmoFeiShi/Qx/blob/main/helloobike.snippet) | Loon 本地存储及模拟响应适配；请求体缺失时透传；上游仅供学习与自用，公开再分发授权未独立确认；真机待验证 |
+- **腾讯视频**：适配二进制请求及响应接口。
+- **美团**：直接引用经过检查的上游 JS；域名通配符需要 Loon Build 1008 或以上版本。
+- **哈啰**：适配本地存储及模拟响应；请求上下文缺失时原样放行。
+
+以上插件均尚未完成 Loon 真机验证。当前三个插件的上游均声明仅供学习与自用，公开再分发授权尚未独立确认。
 
 新增插件时，应分别记录原作者、上游地址、许可证或使用声明、适配范围及测试状态。本表不代表原作者已经授权本仓库公开再分发其作品。
 
