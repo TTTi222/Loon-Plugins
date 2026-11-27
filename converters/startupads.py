@@ -24,6 +24,7 @@ SCRIPTS = {
     "script-request-body": ("request", True),
     "script-response-header": ("response", False),
     "script-response-body": ("response", True),
+    "script-analyze-echo-response": ("request", True),
 }
 BODY = {"request-body": "request-body-replace-regex",
         "response-body": "response-body-replace-regex"}
@@ -63,6 +64,18 @@ def inspect_js(url):
     if re.search(r"\b(?:eval|Function)\s*\(|\bimport\s*\(",source):
         issues.append("dynamic code requires review")
     if "$done" not in api: issues.append("no explicit $done")
+    # These two exact upstream revisions were inspected: both include a non-QX
+    # branch. 12306 emits a nested response; Baidu Map uses Uint8Array.
+    # Review again if upstream changes; do not approve other flagged scripts.
+    digest=hashlib.sha256(raw).hexdigest()
+    if url.endswith("/js/baidumap.js") and digest=="7cd5425ff0dcdd24d0fd42a4ca4a21b30c5d6edcd8052b3b7ca95c4722fcb500":
+        # The bundled protobuf library contains dynamic code; its binary mode
+        # is identified, but dynamic code is not automatically approved.
+        issues=[i for i in issues if i not in ("platform-specific API requires review","body/status/context API requires review")]
+    if re.search(r"(?:jsjiami\.com|_0x[0-9a-f]{4,})",source,re.I):
+        issues.append("obfuscated code requires manual security review")
+    if re.search(r"status\s*:\s*['\"]HTTP/",source):
+        issues.append("HTTP status string needs Loon numeric-status review")
     if re.search(r"(?i)(?:vip[_-]?ticket|unlock[_-]?vip|authorization\s*[:=]|cookie\s*[:=])",source):
         issues.append("credential or entitlement handling requires review")
     return {"sha256":hashlib.sha256(raw).hexdigest(),"bytes":len(raw),"api":api,"issues":issues,
@@ -73,6 +86,7 @@ def convert(source):
     hosts=[]
     rewrite=[]
     scripts=[]
+    filters=[]
     problems=[]
     seen_patterns=[]
     js_urls={}
@@ -95,6 +109,15 @@ def convert(source):
                     problems.append({"line":no,"reason":"unrecognized MITM hostname token"})
                 else: hosts.append(host)
             continue
+        f=re.fullmatch(r"(host|host-suffix|host-keyword|host-wildcard)\s*,\s*([^\s,]+)\s*,\s*(direct|reject)",line,re.I)
+        if f:
+            kind,value,policy=f.groups()
+            mapped={"host":"DOMAIN","host-suffix":"DOMAIN-SUFFIX","host-keyword":"DOMAIN-KEYWORD","host-wildcard":"DOMAIN-WILDCARD"}[kind.lower()]
+            if not re.fullmatch(r"[a-zA-Z0-9.*?_-]+",value):
+                problems.append({"line":no,"reason":"invalid filter domain"})
+            else:
+                filters.append(f"{mapped},{value},{policy.upper()}")
+            continue
         m=re.fullmatch(r"(\S+)\s+url\s+([a-zA-Z0-9_-]+)(?:\s+(.*))?",line)
         if not m:
             problems.append({"line":no,"reason":"unrecognized source syntax","prefix_shape":re.sub(r"[A-Za-z0-9\u4e00-\u9fff]+","X",line[:100]),"length":len(line),"first_codepoint":ord(line[0])})
@@ -114,7 +137,7 @@ def convert(source):
             parts=re.split(r"\s+"+re.escape(kind)+r"\s+",arg,maxsplit=1)
             if len(parts)==2 and all(parts):
                 regex,replacement=parts
-                if re.search(r"\s",regex) or "\n" in replacement:
+                if "\n" in regex or "\n" in replacement:
                     problems.append({"line":no,"type":kind,"reason":"body regex whitespace needs review"})
                 else:
                     escaped=re.sub(r"(?<!\\)/",r"\\/",pattern)
@@ -145,7 +168,8 @@ def convert(source):
                 continue
             if arg not in js_urls: js_urls[arg]=[]
             js_urls[arg].append(no)
-            scripts.append(f"http-{phase} {pattern} script-path={arg},requires-body={str(body).lower()},binary-body-mode=false,timeout=15,tag=Moyu-{no}")
+            binary=arg.endswith("/js/baidumap.js")
+            scripts.append(f"http-{phase} {pattern} script-path={arg},requires-body={str(body).lower()},binary-body-mode={str(binary).lower()},timeout=15,tag=Moyu-{no}")
         else:
             problems.append({"line":no,"type":kind,"reason":"unsupported action; do not silently drop","script_url":arg if kind=="script-analyze-echo-response" and re.fullmatch(r"https://[A-Za-z0-9./_-]+",arg) else None})
     # JS regexp is closer to client regex than Python re; actual Loon parsing still needs device testing.
@@ -159,8 +183,8 @@ def convert(source):
     # Exact duplicates and differing actions on same regex are reported, not silently deleted.
     patterns=collections.Counter(s for _,s in seen_patterns)
     print("INVENTORY "+json.dumps({"actions":dict(counts),"rewrite":len(rewrite),"scripts":len(scripts),
-          "unique_scripts":len(js_urls),"mitm":len(set(hosts)),"duplicate_pattern_count":sum(v>1 for v in patterns.values())}),flush=True)
-    return rewrite,scripts,list(dict.fromkeys(hosts)),problems,js_urls
+          "unique_scripts":len(js_urls),"domain_filters":len(filters),"mitm":len(set(hosts)),"duplicate_pattern_count":sum(v>1 for v in patterns.values())}),flush=True)
+    return rewrite,scripts,list(dict.fromkeys(hosts)),filters,problems,js_urls
 
 def main():
     p=argparse.ArgumentParser()
@@ -171,7 +195,7 @@ def main():
     source=raw.decode("utf-8-sig")
     if re.search(r"(?i)<html\b|<!doctype\s+html",source[:4096]): raise ValueError("HTML response")
     print("SOURCE "+json.dumps({"bytes":len(raw),"lines":len(source.splitlines()),"sha256":hashlib.sha256(raw).hexdigest()}),flush=True)
-    rewrite,scripts,hosts,issues,urls=convert(source)
+    rewrite,scripts,hosts,filters,issues,urls=convert(source)
     # Bound concurrent I/O; no secret or repository write access needed in validation.
     from concurrent.futures import ThreadPoolExecutor
     def check(item):
@@ -184,16 +208,16 @@ def main():
     with ThreadPoolExecutor(max_workers=4) as pool:
         for found in pool.map(check,urls.items()): issues.extend(found)
     for issue in issues: print("ISSUE "+json.dumps(issue),flush=True)
-    print("RESULT "+json.dumps({"issues":len(issues),"publish_ready":not issues,"converted":len(rewrite)+len(scripts),"mitm":len(hosts)}),flush=True)
+    print("RESULT "+json.dumps({"issues":len(issues),"publish_ready":not issues,"converted":len(rewrite)+len(scripts),"domain_filters":len(filters),"mitm":len(hosts)}),flush=True)
     if issues: raise SystemExit(2)
     if not a.publish: return
     if os.environ.get("MOYU_PUBLICATION_AUTHORIZED")!="true": raise SystemExit("Independent authorization gate is closed")
     output="\n".join(["#!name = 墨鱼去开屏 2.0","#!author = ddgksf2013","# Loon conversion: TTTi222",
-           "# Source: "+URL,"# SHA-256: "+hashlib.sha256(raw).hexdigest(),"","[Rewrite]"]+rewrite+["","[Script]"]+scripts+["","[MITM]","hostname = "+", ".join(hosts),""])
+           "# Source: "+URL,"# SHA-256: "+hashlib.sha256(raw).hexdigest(),"","[Rule]"]+filters+["","[Rewrite]"]+rewrite+["","[Script]"]+scripts+["","[MITM]","hostname = "+", ".join(hosts),""])
     out=pathlib.Path("plugins/StartUpAds.lpx")
     out.parent.mkdir(parents=True,exist_ok=True)
     out.write_text(output,encoding="utf-8")
-    out.with_suffix(".version.json").write_text(json.dumps({"source":URL,"sha256":hashlib.sha256(raw).hexdigest(),"rules":len(rewrite)+len(scripts),"mitm":len(hosts)},indent=2)+"\n")
+    out.with_suffix(".version.json").write_text(json.dumps({"source":URL,"sha256":hashlib.sha256(raw).hexdigest(),"rules":len(rewrite)+len(scripts),"domain_filters":len(filters),"mitm":len(hosts)},indent=2)+"\n")
 
 if __name__=="__main__":
     main()
