@@ -1,0 +1,70 @@
+name: Diagnose Moyu upstream fetch
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/test-startupads-fetch.yml
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Test official source with four User-Agents
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import subprocess, tempfile, pathlib, re, json, hashlib
+          from urllib.parse import urlsplit
+          url = "https://ddgksf2013.top/rewrite/StartUpAds.conf"
+          agents = [("default-curl",None),("surge","surge"),("Quantumult X","Quantumult%20X"),("Loon","Loon")]
+          results=[]
+          with tempfile.TemporaryDirectory() as tmp:
+              for i,(label,ua) in enumerate(agents):
+                  body=pathlib.Path(tmp)/f"body{i}"
+                  hdr=pathlib.Path(tmp)/f"headers{i}"
+                  cmd=["curl","--silent","--show-error","--location","--max-redirs","5","--connect-timeout","10","--max-time","35","--max-filesize","4000000","--proto","=https","--proto-redir","=https","--compressed","--dump-header",str(hdr),"--output",str(body),"--write-out","%{http_code}\n%{url_effective}\n%{content_type}\n%{num_redirects}\n",url]
+                  if ua is not None:
+                      cmd.extend(["--user-agent",ua])
+                  p=subprocess.run(cmd,capture_output=True,text=True)
+                  fields=(p.stdout.splitlines()+[""]*4)[:4]
+                  raw=body.read_bytes() if body.exists() else b""
+                  try:
+                      s=raw.decode("utf-8-sig")
+                      utf8=True
+                  except UnicodeDecodeError:
+                      s=raw.decode("utf-8",errors="replace")
+                      utf8=False
+                  html=bool(re.search(r"(?is)^\s*(?:<!doctype\s+html|<html\b|<head\b|<body\b)",s) or re.search(r"(?is)<html\b",s[:4096]))
+                  lines=s.splitlines()
+                  rules=[l.strip() for l in lines if not l.lstrip().startswith(("#",";","//")) and re.search(r"\s+url\s+\S+",l)]
+                  kinds={}
+                  for l in rules:
+                      k=re.search(r"\s+url\s+(\S+)",l)[1]
+                      if re.fullmatch(r"[A-Za-z0-9_-]{1,40}",k):
+                          kinds[k]=kinds.get(k,0)+1
+                      else:
+                          kinds["other"]=kinds.get("other",0)+1
+                  hosts=[]
+                  for l in lines:
+                      m=re.match(r"^\s*hostname\s*=\s*(.*)$",l,re.I)
+                      if m: hosts.extend(x.strip() for x in m[1].split(",") if x.strip())
+                  redirects=[]
+                  for l in hdr.read_text(errors="replace").splitlines() if hdr.exists() else []:
+                      if l.startswith("HTTP/"):
+                          redirects.append(l.strip()[:100])
+                      elif l.lower().startswith("location:"):
+                          loc=l.split(":",1)[1].strip()
+                          parsed=urlsplit(loc)
+                          redirects.append("Location: "+(parsed.scheme+"://"+parsed.netloc if parsed.netloc else "")+parsed.path)
+                  final=urlsplit(fields[1])
+                  valid=p.returncode==0 and fields[0]=="200" and utf8 and not html and len(rules)>=10 and bool(hosts)
+                  result={"agent":label,"curl_exit":p.returncode,"http":fields[0],"final_url":(final.scheme+"://"+final.netloc if final.netloc else "")+final.path,"content_type":fields[2],"redirect_count":fields[3],"response_chain":redirects,"bytes":len(raw),"utf8":utf8,"html":html,"lines":len(lines),"qx_rules":len(rules),"rule_types":kinds,"unique_mitm_hosts":len(set(hosts)),"sha256":hashlib.sha256(raw).hexdigest() if raw else None,"structure_check":valid}
+                  results.append(result)
+                  print("PROBE "+json.dumps(result,ensure_ascii=False),flush=True)
+          print("RESULT "+json.dumps({"valid_agents":[r["agent"] for r in results if r["structure_check"]],"note":"Structural check only; no upstream content published."}),flush=True)
+          PY
