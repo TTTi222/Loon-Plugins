@@ -13,6 +13,8 @@ import pathlib
 import re
 import subprocess
 import tempfile
+import functools
+import fnmatch
 import urllib.parse
 import urllib.request
 
@@ -46,8 +48,37 @@ def download(url, limit=4_000_000):
             raise ValueError("HTML rather than source")
         return raw,resp.geturl()
 
+@functools.lru_cache(maxsize=64)
+def github_revision(owner, repo, ref):
+    if re.fullmatch(r"[0-9a-f]{40}",ref): return ref
+    p=subprocess.run(["git","ls-remote","--exit-code",
+        f"https://github.com/{owner}/{repo}.git",f"refs/heads/{ref}"],
+        capture_output=True,text=True,check=True,timeout=25)
+    rows=p.stdout.splitlines()
+    if len(rows)!=1: raise ValueError("ambiguous Git revision")
+    sha=rows[0].split()[0]
+    if not re.fullmatch(r"[0-9a-f]{40}",sha): raise ValueError("invalid Git revision")
+    return sha
+
+def pin_url(url):
+    u=urllib.parse.urlsplit(url)
+    if u.hostname!="raw.githubusercontent.com" or u.scheme!="https" or u.query or u.fragment:
+        raise ValueError("unreviewed script host")
+    parts=u.path.strip("/").split("/")
+    if len(parts)<4 or not all(re.fullmatch(r"[A-Za-z0-9_.-]+",p) and p not in (".","..") for p in parts):
+        raise ValueError("unreviewed script path")
+    owner,repo=parts[:2]
+    rest=parts[2:]
+    if rest[:2]==["refs","heads"]: rest=rest[2:]
+    ref,*path=rest
+    if not path: raise ValueError("missing path")
+    sha=github_revision(owner,repo,ref)
+    return "https://raw.githubusercontent.com/"+"/".join([owner,repo,sha]+path)
+
 def inspect_js(url):
-    raw,final=download(url,2_000_000)
+    pinned=pin_url(url)
+    raw,final=download(pinned,2_000_000)
+    if final!=pinned: raise ValueError("unexpected script redirect")
     source=raw.decode("utf-8-sig")
     # Only inspect and parse; do not run remotely downloaded scripts.
     with tempfile.TemporaryDirectory() as tmp:
@@ -78,8 +109,23 @@ def inspect_js(url):
         issues.append("HTTP status string needs Loon numeric-status review")
     if re.search(r"(?i)(?:vip[_-]?ticket|unlock[_-]?vip|authorization\s*[:=]|cookie\s*[:=])",source):
         issues.append("credential or entitlement handling requires review")
-    return {"sha256":hashlib.sha256(raw).hexdigest(),"bytes":len(raw),"api":api,"issues":issues,
-            "redirected":final!=url}
+    adapter=None
+    # Only audited exact revisions may take the narrow compatibility path.
+    if url.endswith("/12306.js") and digest=="4723bc2236835eea0a8b79529c832a9af1cfd37fa1b160becb3a4b51f9067cd5":
+        adapter="rail_echo"
+    if url.endswith("/hanglvzongheng.js") and digest=="24173b13433fc3c46b29577301c044425b1159f24f6fe577eef9a8227120f201":
+        adapter="flight_header"
+    if adapter:
+        from startupads_support import adapt_and_test
+        generated,checks=adapt_and_test(adapter,source)
+        # Clear only the exact issue addressed by the tested adapter.
+        resolved={"rail_echo":"platform-specific API requires review","flight_header":"HTTP status string needs Loon numeric-status review"}[adapter]
+        issues=[i for i in issues if i!=resolved]
+    else:
+        generated=None
+        checks=0
+    return {"sha256":digest,"bytes":len(raw),"api":api,"issues":issues,
+            "pinned":pinned,"adapter":adapter,"adapter_tests":checks,"generated":generated}
 
 def convert(source):
     counts=collections.Counter()
@@ -89,6 +135,7 @@ def convert(source):
     filters=[]
     problems=[]
     seen_patterns=[]
+    match_rules=[]
     js_urls={}
     metadata={}
     for no,raw in enumerate(source.splitlines(),1):
@@ -125,6 +172,8 @@ def convert(source):
         pattern,kind,arg=m[1],m[2].lower(),m[3] or ""
         counts[kind]+=1
         seen_patterns.append((no,pattern))
+        phase=SCRIPTS.get(kind,(kind.split('-')[0] if kind in BODY else ('response' if kind.startswith('jsonjq-response') else 'request'),False))[0]
+        match_rules.append((no,phase,pattern,kind,arg))
         if kind in REJECTS and not arg:
             if kind == "reject":
                 # QX reject returns HTTP 404, not a TCP reset.
@@ -180,6 +229,11 @@ def convert(source):
         problems.append({"reason":"source below minimum baseline; possible truncation"})
     if len(rewrite)+len(scripts)!=sum(counts.values()):
         problems.append({"reason":"not all rules converted","converted":len(rewrite)+len(scripts)})
+    from startupads_support import audit_conflicts
+    findings=audit_conflicts(match_rules,filters,hosts)
+    for finding in findings:
+        print("CONFLICT "+json.dumps(finding),flush=True)
+        if finding.get("blocking"): problems.append({"reason":"rule conflict requires review",**finding})
     # Exact duplicates and differing actions on same regex are reported, not silently deleted.
     patterns=collections.Counter(s for _,s in seen_patterns)
     print("INVENTORY "+json.dumps({"actions":dict(counts),"rewrite":len(rewrite),"scripts":len(scripts),
@@ -198,20 +252,36 @@ def main():
     rewrite,scripts,hosts,filters,issues,urls=convert(source)
     # Bound concurrent I/O; no secret or repository write access needed in validation.
     from concurrent.futures import ThreadPoolExecutor
+    checked={}
     def check(item):
         url,lines=item
         try: result=inspect_js(url)
         except Exception as e: result={"issues":["download or syntax inspection failed: "+type(e).__name__]}
         # Only public script path (no query, credentials, or source bodies) and audit metadata in logs.
-        print("SCRIPT "+json.dumps({"url":url,"lines":lines,**result}),flush=True)
-        return [{"line":n,"reason":reason} for n in lines for reason in result["issues"]]
+        print("SCRIPT "+json.dumps({"url":url,"lines":lines,**{k:v for k,v in result.items() if k!="generated"}}),flush=True)
+        return url,result,[{"line":n,"reason":reason} for n in lines for reason in result["issues"]]
     with ThreadPoolExecutor(max_workers=4) as pool:
-        for found in pool.map(check,urls.items()): issues.extend(found)
+        for url,result,found in pool.map(check,urls.items()):
+            checked[url]=result
+            issues.extend(found)
     for issue in issues: print("ISSUE "+json.dumps(issue),flush=True)
     print("RESULT "+json.dumps({"issues":len(issues),"publish_ready":not issues,"converted":len(rewrite)+len(scripts),"domain_filters":len(filters),"mitm":len(hosts)}),flush=True)
     if issues: raise SystemExit(2)
     if not a.publish: return
     if os.environ.get("MOYU_PUBLICATION_AUTHORIZED")!="true": raise SystemExit("Independent authorization gate is closed")
+    # Never link a mutable upstream JS reference. Generated adapters are versioned.
+    generated_files={}
+    for original,result in checked.items():
+        target=result["pinned"]
+        if result.get("generated"):
+            code=result["generated"]
+            digest=hashlib.sha256(code.encode()).hexdigest()[:20]
+            name=f"moyu-{result['adapter']}-{digest}.js"
+            generated_files[name]=code
+            target="https://raw.githubusercontent.com/TTTi222/Loon-Plugins/main/scripts/"+name
+        scripts=[line.replace("script-path="+original+",","script-path="+target+",") for line in scripts]
+    for name,code in generated_files.items():
+        pathlib.Path("scripts",name).write_text(code,encoding="utf-8")
     output="\n".join(["#!name = 墨鱼去开屏 2.0","#!author = ddgksf2013","# Loon conversion: TTTi222",
            "# Source: "+URL,"# SHA-256: "+hashlib.sha256(raw).hexdigest(),"","[Rule]"]+filters+["","[Rewrite]"]+rewrite+["","[Script]"]+scripts+["","[MITM]","hostname = "+", ".join(hosts),""])
     out=pathlib.Path("plugins/StartUpAds.lpx")
