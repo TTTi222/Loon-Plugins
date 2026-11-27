@@ -80,7 +80,7 @@ def convert(source):
     for no,raw in enumerate(source.splitlines(),1):
         line=raw.strip()
         if not line: continue
-        if line.startswith(("#",";","//")):
+        if line.startswith(("#",";","//","!")):
             continue
         if line.startswith("[") and line.endswith("]"):
             if line.lower() not in ("[rewrite_local]","[mitm]","[rewrite]"):
@@ -97,21 +97,34 @@ def convert(source):
             continue
         m=re.fullmatch(r"(\S+)\s+url\s+([a-zA-Z0-9_-]+)(?:\s+(.*))?",line)
         if not m:
-            problems.append({"line":no,"reason":"unrecognized source syntax"})
+            problems.append({"line":no,"reason":"unrecognized source syntax","prefix_shape":re.sub(r"[A-Za-z0-9\u4e00-\u9fff]+","X",line[:100]),"length":len(line),"first_codepoint":ord(line[0])})
             continue
         pattern,kind,arg=m[1],m[2].lower(),m[3] or ""
         counts[kind]+=1
         seen_patterns.append((no,pattern))
         if kind in REJECTS and not arg:
-            rewrite.append(f"{pattern} {kind}")
-        elif kind in BODY:
-            # Legacy Loon separates tokens by whitespace; avoid guessing quoted or ambiguous replacements.
-            parts=arg.split()
-            if len(parts)==2 and not any(p.startswith(("'",'"')) or p.endswith(("'",'"')) for p in parts):
-                rewrite.append(f"{pattern} {BODY[kind]} {arg}")
-                seen_patterns.append((no,parts[0]))
+            if kind == "reject":
+                # QX reject returns HTTP 404, not a TCP reset.
+                escaped=re.sub(r"(?<!\\)/",r"\\/",pattern)
+                rewrite.append("request if ${url} ~= /"+escaped+"/ then reject(404)")
             else:
-                problems.append({"line":no,"type":kind,"reason":"body token syntax needs review","tokens":len(parts)})
+                rewrite.append(f"{pattern} {kind}")
+        elif kind in BODY:
+            # QX uses a repeated action token to separate regex and replacement.
+            parts=re.split(r"\s+"+re.escape(kind)+r"\s+",arg,maxsplit=1)
+            if len(parts)==2 and all(parts):
+                regex,replacement=parts
+                if re.search(r"\s",regex) or "\n" in replacement:
+                    problems.append({"line":no,"type":kind,"reason":"body regex whitespace needs review"})
+                else:
+                    escaped=re.sub(r"(?<!\\)/",r"\\/",pattern)
+                    bodyregex=re.sub(r"(?<!\\)/",r"\\/",regex)
+                    phase=kind.split("-")[0]
+                    literal=chr(96)+replacement.replace(chr(96),chr(96)*2)+chr(96)
+                    rewrite.append(f"{phase} if "+'${url}'+" ~= /"+escaped+f"/ then {phase}.body.replace(/{bodyregex}/, {literal})")
+                    seen_patterns.append((no,regex))
+            else:
+                problems.append({"line":no,"type":kind,"reason":"body delimiter requires review","tokens":len(arg.split())})
         elif kind in JQ:
             expr=arg.strip()
             if len(expr)>=2 and expr[0]==expr[-1] and expr[0] in "'\"":
@@ -134,7 +147,7 @@ def convert(source):
             js_urls[arg].append(no)
             scripts.append(f"http-{phase} {pattern} script-path={arg},requires-body={str(body).lower()},binary-body-mode=false,timeout=15,tag=Moyu-{no}")
         else:
-            problems.append({"line":no,"type":kind,"reason":"unsupported action; do not silently drop"})
+            problems.append({"line":no,"type":kind,"reason":"unsupported action; do not silently drop","script_url":arg if kind=="script-analyze-echo-response" and re.fullmatch(r"https://[A-Za-z0-9./_-]+",arg) else None})
     # JS regexp is closer to client regex than Python re; actual Loon parsing still needs device testing.
     p=subprocess.run(["node","-e",r"const a=JSON.parse(require('fs').readFileSync(0,'utf8'));console.log(JSON.stringify(a.filter(([n,s])=>{try{new RegExp(s);return false}catch(e){return true}}).map(([n])=>n)));"],input=json.dumps(seen_patterns),capture_output=True,text=True,check=True,timeout=15)
     for no in json.loads(p.stdout):
