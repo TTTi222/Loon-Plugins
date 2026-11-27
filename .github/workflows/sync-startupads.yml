@@ -1,0 +1,54 @@
+name: Sync Moyu StartUpAds Loon plugin
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '11 */6 * * *'
+  push:
+    branches: [main]
+    paths:
+      - converters/startupads.py
+      - .github/workflows/sync-startupads.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: startupads-sync
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Fetch and audit official upstream without publishing
+        run: python3 converters/startupads.py
+  publish:
+    needs: validate
+    if: ${{ vars.MOYU_PUBLICATION_AUTHORIZED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Revalidate and generate plugin
+        env:
+          MOYU_PUBLICATION_AUTHORIZED: 'true'
+        run: python3 converters/startupads.py --publish
+      - name: Publish only validated Moyu plugin
+        run: |
+          git add plugins/StartUpAds.lpx plugins/StartUpAds.version.json
+          if git diff --cached --quiet; then
+            echo 'No changes'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Sync validated Moyu StartUpAds plugin'
+          git push origin HEAD:main
