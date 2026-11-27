@@ -30,6 +30,12 @@ Loon 插件兼容性适配、格式转换及自动同步项目。
 | 美团净化 | ZenMoFiShi | [源码](https://github.com/ZenmoFeiShi/Qx/blob/main/MT.snippet) | [LPX](https://raw.githubusercontent.com/TTTi222/Loon-Plugins/main/plugins/MT.lpx) | 模拟通过 |
 | 哈啰净化 | ZenMoFiShi | [源码](https://github.com/ZenmoFeiShi/Qx/blob/main/helloobike.snippet) | [LPX](https://raw.githubusercontent.com/TTTi222/Loon-Plugins/main/plugins/helloobike.lpx) | 模拟通过 |
 
+### 待审查插件
+
+| 插件 | 原作者 | 状态 | 说明 |
+| :--- | :--- | :---: | :--- |
+| 芒果 TV（mgtv_vip） | 怎么肥事 | 未发布 | 上游脚本使用来源及授权尚未确认的固定播放凭据；不提供远程订阅或自动发布 |
+
 ### 适配说明
 
 - **腾讯视频**：适配二进制请求及响应接口。
