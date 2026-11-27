@@ -29,18 +29,15 @@ Loon 插件兼容性适配、格式转换及自动同步项目。
 | 腾讯视频净化 | ZenMoFiShi | [源码](https://github.com/ZenmoFeiShi/Qx/blob/main/TxvideoAD.snippet) | [LPX](https://raw.githubusercontent.com/TTTi222/Loon-Plugins/main/plugins/TxvideoAD.lpx) | 静态通过 |
 | 美团净化 | ZenMoFiShi | [源码](https://github.com/ZenmoFeiShi/Qx/blob/main/MT.snippet) | [LPX](https://raw.githubusercontent.com/TTTi222/Loon-Plugins/main/plugins/MT.lpx) | 模拟通过 |
 | 哈啰净化 | ZenMoFiShi | [源码](https://github.com/ZenmoFeiShi/Qx/blob/main/helloobike.snippet) | [LPX](https://raw.githubusercontent.com/TTTi222/Loon-Plugins/main/plugins/helloobike.lpx) | 模拟通过 |
+| 芒果 TV 个人凭据配置 | TTTi222（适配） | 本地参数版 | [LPX](https://raw.githubusercontent.com/TTTi222/Loon-Plugins/main/plugins/mgtv-personal.lpx) | 模拟通过 |
 
-### 待审查插件
-
-| 插件 | 原作者 | 状态 | 说明 |
-| :--- | :--- | :---: | :--- |
-| 芒果 TV（mgtv_vip） | 怎么肥事 | 未发布 | 上游脚本使用来源及授权尚未确认的固定播放凭据；不提供远程订阅或自动发布 |
 
 ### 适配说明
 
 - **腾讯视频**：适配二进制请求及响应接口。
 - **美团**：直接引用经过检查的上游 JS；域名通配符需要 Loon Build 1008 或以上版本。
 - **哈啰**：适配本地存储及模拟响应；请求上下文缺失时原样放行。
+- **芒果 TV**：独立个人凭据配置版，默认关闭、无内置凭据；需 Loon 3.5.1 (983)+，仅填写本人获准使用的 Ticket。不自动同步上游固定凭据。注意插件参数、请求日志及备份可能包含敏感信息。
 
 以上插件均尚未完成 Loon 真机验证。当前三个插件的上游均声明仅供学习与自用，公开再分发授权尚未独立确认。
 
