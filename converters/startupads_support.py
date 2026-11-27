@@ -39,13 +39,17 @@ ADAPTERS = {
 """
 }
 
-def adapt_and_test(name, source):
+def adapt_and_test(name, source, phase):
     # Pinning and exact digest checking are the caller's responsibility.
     # Refuse a semantic mismatch even if a caller accidentally changes the digest.
     required={"rail_echo":("placementNo","0007","G0054","$request.body","$done"),
               "flight_header":("10000012","1000019","rpid","HTTP/1.1 404","$done")}
     if not all(s in source for s in required[name]): raise ValueError("adapter source mismatch")
+    if name=="rail_echo" and phase!="request": raise ValueError("echo phase mismatch")
     code="// Loon adaptation; original ad behavior: ddgksf2013\n"+ADAPTERS[name].strip()+"\n"
+    if name=="flight_header" and phase=="response":
+        code=code.replace('$done({response:{status:404,headers:{},body:""}})','$done({status:404})')
+    if phase not in ("request","response"): raise ValueError("unknown script phase")
     tests={
       "rail_echo":[
         [{"body":'{"placementNo":"0007"}'},200,"0007"],
@@ -72,7 +76,7 @@ for (const [request,status,placement] of data.tests) {
   const result=calls[0];
   if(status===null) assert.equal(Object.keys(result).length,0);
   else {
-    assert.equal(result.response.status,status);
+    assert.equal(data.phase==='response'?result.status:result.response.status,status);
     if(placement!==null) {
       const body=JSON.parse(result.response.body);
       assert.equal(body.code,"00");
@@ -84,7 +88,7 @@ for (const [request,status,placement] of data.tests) {
 }
 console.log(data.tests.length);
 """
-    proc=subprocess.run(["node","-e",harness],input=json.dumps({"code":code,"tests":tests}),text=True,capture_output=True,timeout=10,check=True)
+    proc=subprocess.run(["node","-e",harness],input=json.dumps({"code":code,"tests":tests,"phase":phase}),text=True,capture_output=True,timeout=10,check=True)
     return code,int(proc.stdout.strip())
 
 def pattern_key(p):
