@@ -75,7 +75,7 @@ def pin_url(url):
     sha=github_revision(owner,repo,ref)
     return "https://raw.githubusercontent.com/"+"/".join([owner,repo,sha]+path)
 
-def inspect_js(url):
+def inspect_js(url, phases):
     pinned=pin_url(url)
     raw,final=download(pinned,2_000_000)
     if final!=pinned: raise ValueError("unexpected script redirect")
@@ -117,7 +117,8 @@ def inspect_js(url):
         adapter="flight_header"
     if adapter:
         from startupads_support import adapt_and_test
-        generated,checks=adapt_and_test(adapter,source)
+        if len(phases)!=1: raise ValueError('adapter has ambiguous phases')
+        generated,checks=adapt_and_test(adapter,source,next(iter(phases)))
         # Clear only the exact issue addressed by the tested adapter.
         resolved={"rail_echo":"platform-specific API requires review","flight_header":"HTTP status string needs Loon numeric-status review"}[adapter]
         issues=[i for i in issues if i!=resolved]
@@ -192,7 +193,10 @@ def convert(source):
                     escaped=re.sub(r"(?<!\\)/",r"\\/",pattern)
                     bodyregex=re.sub(r"(?<!\\)/",r"\\/",regex)
                     phase=kind.split("-")[0]
-                    literal=chr(96)+replacement.replace(chr(96),chr(96)*2)+chr(96)
+                    if chr(96) in replacement or "${" in replacement:
+                        problems.append({"line":no,"reason":"replacement quoting or interpolation requires review"})
+                        continue
+                    literal=chr(96)+replacement+chr(96)
                     rewrite.append(f"{phase} if "+'${url}'+" ~= /"+escaped+f"/ then {phase}.body.replace(/{bodyregex}/, {literal})")
                     seen_patterns.append((no,regex))
             else:
@@ -208,7 +212,10 @@ def convert(source):
                 p=subprocess.run(["jq","-n","empty | ("+expr+")"],capture_output=True,text=True,timeout=5)
                 if p.returncode:
                     problems.append({"line":no,"type":kind,"reason":"JQ compilation failed"})
-                else: rewrite.append(f"{pattern} {JQ[kind]} '{expr}'")
+                else:
+                    escaped=re.sub(r"(?<!\\)/",r"\\/",pattern)
+                    phase="response" if kind.startswith("jsonjq-response") else "request"
+                    rewrite.append(f"{phase} if "+'${url}'+" ~= /"+escaped+f"/ then {phase}.json.jq("+json.dumps(expr,ensure_ascii=False)+")")
         elif kind in SCRIPTS:
             phase,body=SCRIPTS[kind]
             u=urllib.parse.urlsplit(arg)
@@ -225,7 +232,7 @@ def convert(source):
     p=subprocess.run(["node","-e",r"const a=JSON.parse(require('fs').readFileSync(0,'utf8'));console.log(JSON.stringify(a.filter(([n,s])=>{try{new RegExp(s);return false}catch(e){return true}}).map(([n])=>n)));"],input=json.dumps(seen_patterns),capture_output=True,text=True,check=True,timeout=15)
     for no in json.loads(p.stdout):
         problems.append({"line":no,"reason":"regex rejected by JS engine; review client compatibility"})
-    if sum(counts.values())<450 or len(set(hosts))<400:
+    if sum(counts.values())<450 or len(set(hosts))<400 or len(filters)<6:
         problems.append({"reason":"source below minimum baseline; possible truncation"})
     if len(rewrite)+len(scripts)!=sum(counts.values()):
         problems.append({"reason":"not all rules converted","converted":len(rewrite)+len(scripts)})
@@ -245,7 +252,12 @@ def main():
     p.add_argument("--source-file",type=pathlib.Path)
     p.add_argument("--publish",action="store_true")
     a=p.parse_args()
-    raw=a.source_file.read_bytes() if a.source_file else download(URL)[0]
+    if a.publish and (a.source_file or os.environ.get("MOYU_PUBLICATION_AUTHORIZED")!="true"):
+        raise SystemExit("Publication gate closed or non-official source")
+    if a.source_file: raw=a.source_file.read_bytes()
+    else:
+        raw,final=download(URL)
+        if final!=URL: raise ValueError("unexpected upstream redirect")
     source=raw.decode("utf-8-sig")
     if re.search(r"(?i)<html\b|<!doctype\s+html",source[:4096]): raise ValueError("HTML response")
     print("SOURCE "+json.dumps({"bytes":len(raw),"lines":len(source.splitlines()),"sha256":hashlib.sha256(raw).hexdigest()}),flush=True)
@@ -255,10 +267,11 @@ def main():
     checked={}
     def check(item):
         url,lines=item
-        try: result=inspect_js(url)
+        phases={line.split(' ',1)[0].removeprefix('http-') for line in scripts if 'script-path='+url+',' in line}
+        try: result=inspect_js(url,phases)
         except Exception as e: result={"issues":["download or syntax inspection failed: "+type(e).__name__]}
         # Only public script path (no query, credentials, or source bodies) and audit metadata in logs.
-        print("SCRIPT "+json.dumps({"url":url,"lines":lines,**{k:v for k,v in result.items() if k!="generated"}}),flush=True)
+        print("SCRIPT "+json.dumps({"url":url,"lines":lines,"phases":sorted(phases),**{k:v for k,v in result.items() if k!="generated"}}),flush=True)
         return url,result,[{"line":n,"reason":reason} for n in lines for reason in result["issues"]]
     with ThreadPoolExecutor(max_workers=4) as pool:
         for url,result,found in pool.map(check,urls.items()):
@@ -282,7 +295,7 @@ def main():
         scripts=[line.replace("script-path="+original+",","script-path="+target+",") for line in scripts]
     for name,code in generated_files.items():
         pathlib.Path("scripts",name).write_text(code,encoding="utf-8")
-    output="\n".join(["#!name = 墨鱼去开屏 2.0","#!author = ddgksf2013","# Loon conversion: TTTi222",
+    output="\n".join(["#!name = 墨鱼去开屏 2.0","#!author = ddgksf2013","# Loon conversion: TTTi222; requires Loon 3.5.1 (978)+",
            "# Source: "+URL,"# SHA-256: "+hashlib.sha256(raw).hexdigest(),"","[Rule]"]+filters+["","[Rewrite]"]+rewrite+["","[Script]"]+scripts+["","[MITM]","hostname = "+", ".join(hosts),""])
     out=pathlib.Path("plugins/StartUpAds.lpx")
     out.parent.mkdir(parents=True,exist_ok=True)
