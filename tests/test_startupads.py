@@ -20,6 +20,10 @@ class StartupAdsTests(unittest.TestCase):
         with self.assertRaises(ValueError):s.adapt_and_test("rail_echo",rail,"response")
         with self.assertRaises(ValueError):s.adapt_and_test("rail_echo","unexpected","request")
 
+    def test_binary_adapter(self):
+        from startupads_baidu_test import test_baidu
+        self.assertEqual(test_baidu()[1],11)
+
     def test_pin(self):
         with patch.object(c,"github_revision",return_value="a"*40):
             self.assertEqual(c.pin_url("https://raw.githubusercontent.com/a/b/refs/heads/master/f.js"),"https://raw.githubusercontent.com/a/b/"+"a"*40+"/f.js")
