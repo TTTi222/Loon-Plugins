@@ -62,7 +62,7 @@ def github_revision(owner, repo, ref):
 
 def pin_url(url):
     u=urllib.parse.urlsplit(url)
-    if u.hostname!="raw.githubusercontent.com" or u.scheme!="https" or u.query or u.fragment:
+    if u.hostname!="raw.githubusercontent.com" or u.scheme!="https" or u.query or u.fragment or u.username or u.password or u.port is not None:
         raise ValueError("unreviewed script host")
     parts=u.path.strip("/").split("/")
     if len(parts)<4 or not all(re.fullmatch(r"[A-Za-z0-9_.-]+",p) and p not in (".","..") for p in parts):
@@ -71,7 +71,7 @@ def pin_url(url):
     rest=parts[2:]
     if rest[:2]==["refs","heads"]: rest=rest[2:]
     ref,*path=rest
-    if not path: raise ValueError("missing path")
+    if not path or not path[-1].endswith(".js"): raise ValueError("missing JS path")
     sha=github_revision(owner,repo,ref)
     return "https://raw.githubusercontent.com/"+"/".join([owner,repo,sha]+path)
 
@@ -109,13 +109,26 @@ def inspect_js(url, phases):
         issues.append("HTTP status string needs Loon numeric-status review")
     if re.search(r"(?i)(?:vip[_-]?ticket|unlock[_-]?vip|authorization\s*[:=]|cookie\s*[:=])",source):
         issues.append("credential or entitlement handling requires review")
+    if re.search(r"禁止转载|禁止\s*转载|不得转载",source):
+        issues.append("explicit upstream redistribution restriction; authorization required")
+    if re.search(r"解除.{0,35}(?:下载限制|流量.{0,15}限制)|unlock.{0,20}quota",source,re.I):
+        issues.append("non-ad quota bypass behavior requires separate review")
     adapter=None
     # Only audited exact revisions may take the narrow compatibility path.
     if url.endswith("/12306.js") and digest=="4723bc2236835eea0a8b79529c832a9af1cfd37fa1b160becb3a4b51f9067cd5":
         adapter="rail_echo"
     if url.endswith("/hanglvzongheng.js") and digest=="24173b13433fc3c46b29577301c044425b1159f24f6fe577eef9a8227120f201":
         adapter="flight_header"
-    if adapter:
+    if url.endswith("/js/baidumap.js") and digest=="7cd5425ff0dcdd24d0fd42a4ca4a21b30c5d6edcd8052b3b7ca95c4722fcb500":
+        adapter="baidu_binary"
+    if adapter=="baidu_binary":
+        if phases!={"response"}: raise ValueError("binary adapter phase mismatch")
+        from startupads_baidu_test import test_baidu
+        generated,checks=test_baidu()
+        # Only replace the dynamic-code concern: the replacement contains
+        # neither dynamic execution nor the bundled upstream library.
+        issues=[i for i in issues if i!="dynamic code requires review"]
+    elif adapter:
         from startupads_support import adapt_and_test
         if len(phases)!=1: raise ValueError('adapter has ambiguous phases')
         generated,checks=adapt_and_test(adapter,source,next(iter(phases)))
@@ -300,7 +313,7 @@ def main():
     out=pathlib.Path("plugins/StartUpAds.lpx")
     out.parent.mkdir(parents=True,exist_ok=True)
     out.write_text(output,encoding="utf-8")
-    out.with_suffix(".version.json").write_text(json.dumps({"source":URL,"sha256":hashlib.sha256(raw).hexdigest(),"rules":len(rewrite)+len(scripts),"domain_filters":len(filters),"mitm":len(hosts)},indent=2)+"\n")
+    out.with_suffix(".version.json").write_text(json.dumps({"source":URL,"sha256":hashlib.sha256(raw).hexdigest(),"rules":len(rewrite)+len(scripts),"domain_filters":len(filters),"mitm":len(hosts),"scripts":[{"source":url,"pinned":result["pinned"],"sha256":result["sha256"],"adapter":result.get("adapter")} for url,result in sorted(checked.items())]},indent=2)+"\n")
 
 if __name__=="__main__":
     main()
