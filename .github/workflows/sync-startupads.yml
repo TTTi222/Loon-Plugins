@@ -8,6 +8,8 @@ on:
     paths:
       - converters/startupads.py
       - converters/startupads_support.py
+      - converters/startupads_baidu.js
+      - converters/startupads_baidu_test.py
       - tests/test_startupads.py
       - .github/workflows/sync-startupads.yml
 
