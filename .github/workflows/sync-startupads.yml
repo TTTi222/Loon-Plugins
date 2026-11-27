@@ -7,6 +7,8 @@ on:
     branches: [main]
     paths:
       - converters/startupads.py
+      - converters/startupads_support.py
+      - tests/test_startupads.py
       - .github/workflows/sync-startupads.yml
 
 permissions:
@@ -24,6 +26,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Run offline regression tests
+        run: python3 tests/test_startupads.py
       - name: Fetch and audit official upstream without publishing
         run: python3 converters/startupads.py
   publish:
@@ -36,14 +40,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Run offline regression tests
+        run: python3 tests/test_startupads.py
       - name: Revalidate and generate plugin
         env:
           MOYU_PUBLICATION_AUTHORIZED: 'true'
         run: python3 converters/startupads.py --publish
       - name: Publish only validated Moyu plugin
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           git add plugins/StartUpAds.lpx plugins/StartUpAds.version.json
+          shopt -s nullglob
+          adapters=(scripts/moyu-*.js)
+          if (( ${#adapters[@]} )); then git add -- "${adapters[@]}"; fi
+          git diff --cached --name-only | while read -r path; do
+            case "$path" in
+              plugins/StartUpAds.lpx|plugins/StartUpAds.version.json|scripts/moyu-*.js) ;;
+              *) echo "Unexpected staged path: $path"; exit 1;;
+            esac
+          done
           if git diff --cached --quiet; then
             echo 'No changes'
             exit 0
@@ -51,4 +69,5 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m 'Sync validated Moyu StartUpAds plugin'
+          gh auth setup-git
           git push origin HEAD:main
